@@ -1,12 +1,12 @@
 """
-Streamlit Web App for House Price Prediction
-Deploy this file to Streamlit Cloud
+Streamlit Web App for House Price Prediction using MLflow
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
 import mlflow
 import mlflow.sklearn
+import os
 
 # Page config
 st.set_page_config(
@@ -17,7 +17,7 @@ st.set_page_config(
 
 # Title
 st.title("🏠 House Price Predictor")
-st.markdown("Predict house prices using Machine Learning")
+st.markdown("Predict house prices using Machine Learning with MLflow")
 
 # Sidebar
 with st.sidebar:
@@ -28,7 +28,13 @@ with st.sidebar:
     **Model:** Linear Regression  
     **Framework:** Scikit-learn  
     **MLOps:** ZenML + MLflow
+    **Model Tracking:** MLflow
     """)
+
+# Initialize MLflow
+# Note: You should be running 'mlflow models serve' in a separate terminal 
+# pointing to the ZenML tracking URI to avoid run location issues.
+mlflow.set_tracking_uri("./mlruns") 
 
 # Input form
 st.header("📝 Enter House Details")
@@ -72,84 +78,196 @@ with col4:
     mo_sold = st.number_input("Month Sold", min_value=1, max_value=12, value=5)
     yr_sold = st.number_input("Year Sold", min_value=2000, max_value=2024, value=2010)
 
-# Predict button
+# Load model function
+@st.cache_resource
+def load_mlflow_model():
+    """Load MLflow model with multiple fallback options"""
+    # Use the Run ID you found to ensure the correct model is targeted
+    run_id = "173084b4925743889a1348fd990f7dc5" 
+    
+    # Try different model paths
+    # Note: If you are running the manual model serve, the MLflow runs URI
+    # 'runs:/<run_id>/model' is the correct method, as it communicates with the server.
+    model_paths = [
+        f"runs:/{run_id}/model",  # MLflow runs URI (Best for manual serving)
+        f"mlruns/0/{run_id}/artifacts/model",  # Local MLflow path (Fallback)
+        "model.pkl",  # Exported pickle file (Fallback)
+    ]
+    
+    for model_path in model_paths:
+        try:
+            if model_path.endswith('.pkl'):
+                # Load from pickle
+                import pickle
+                with open(model_path, 'rb') as f:
+                    model = pickle.load(f)
+                st.sidebar.success("✅ Model loaded from pickle file")
+                return model
+            else:
+                # Load from MLflow
+                model = mlflow.sklearn.load_model(model_path)
+                st.sidebar.success(f"✅ Model loaded from MLflow: {model_path}")
+                return model
+        except Exception as e:
+            continue
+    
+    return None
+
+# --- START OF CORRECTED PREDICTION LOGIC ---
+
+# Categorical Defaults (to satisfy the ColumnTransformer during inference)
+categorical_defaults = {
+    'MS Zoning': 'RL',
+    'Street': 'Pave',
+    'Alley': 'NA',
+    'Lot Shape': 'Reg',
+    'Land Contour': 'Lvl',
+    'Utilities': 'AllPub',
+    'Lot Config': 'Inside',
+    'Land Slope': 'Gtl',
+    'Neighborhood': 'NAmes',
+    'Condition 1': 'Norm',
+    'Condition 2': 'Norm',
+    'Bldg Type': '1Fam',
+    'House Style': '1Story',
+    'Roof Style': 'Gable',
+    'Roof Matl': 'CompShg',
+    'Exterior 1st': 'VinylSd',
+    'Exterior 2nd': 'VinylSd',
+    'Mas Vnr Type': 'None',
+    'Exter Qual': 'TA',
+    'Exter Cond': 'TA',
+    'Foundation': 'PConc',
+    'Bsmt Qual': 'TA',
+    'Bsmt Cond': 'TA',
+    'Bsmt Exposure': 'No',
+    'BsmtFin Type 1': 'GLQ',
+    'BsmtFin Type 2': 'Unf',
+    'Heating': 'GasA',
+    'Heating QC': 'Ex',
+    'Central Air': 'Y',
+    'Electrical': 'SBrkr',
+    'Kitchen Qual': 'TA',
+    'Functional': 'Typ',
+    'Fireplace Qu': 'NA',
+    'Garage Type': 'Attchd',
+    'Garage Finish': 'Unf',
+    'Garage Qual': 'TA',
+    'Garage Cond': 'TA',
+    'Paved Drive': 'Y',
+    'Pool QC': 'NA',
+    'Fence': 'NA',
+    'Misc Feature': 'NA',
+    'Sale Type': 'WD',
+    'Sale Condition': 'Normal',
+}
+
+# The complete list of columns the model expects, in the correct order.
+# This ensures the DataFrame structure matches the training data exactly.
+expected_columns = [
+    'Order', 'PID', 'MS SubClass', 'Lot Frontage', 'Lot Area', 'Overall Qual', 'Overall Cond', 
+    'Year Built', 'Year Remod/Add', 'Mas Vnr Area', 'BsmtFin SF 1', 'BsmtFin SF 2', 
+    'Bsmt Unf SF', 'Total Bsmt SF', '1st Flr SF', '2nd Flr SF', 'Low Qual Fin SF', 
+    'Gr Liv Area', 'Bsmt Full Bath', 'Bsmt Half Bath', 'Full Bath', 'Half Bath', 
+    'Bedroom AbvGr', 'Kitchen AbvGr', 'TotRms AbvGrd', 'Fireplaces', 'Garage Yr Blt', 
+    'Garage Cars', 'Garage Area', 'Wood Deck SF', 'Open Porch SF', 'Enclosed Porch', 
+    '3Ssn Porch', 'Screen Porch', 'Pool Area', 'Misc Val', 'Mo Sold', 'Yr Sold',
+    'MS Zoning', 'Street', 'Alley', 'Lot Shape', 'Land Contour', 'Utilities', 'Lot Config', 
+    'Land Slope', 'Neighborhood', 'Condition 1', 'Condition 2', 'Bldg Type', 'House Style', 
+    'Roof Style', 'Roof Matl', 'Exterior 1st', 'Exterior 2nd', 'Mas Vnr Type', 'Exter Qual', 
+    'Exter Cond', 'Foundation', 'Bsmt Qual', 'Bsmt Cond', 'Bsmt Exposure', 'BsmtFin Type 1', 
+    'BsmtFin Type 2', 'Heating', 'Heating QC', 'Central Air', 'Electrical', 'Kitchen Qual', 
+    'Functional', 'Fireplace Qu', 'Garage Type', 'Garage Finish', 'Garage Qual', 'Garage Cond', 
+    'Paved Drive', 'Pool QC', 'Fence', 'Misc Feature', 'Sale Type', 'Sale Condition'
+]
+
 if st.button("🔮 Predict Price", type="primary"):
     try:
-        # Prepare input data
-        input_data = {
-            "Order": [1],
-            "PID": [5286],
-            "MS SubClass": [20],
-            "Lot Frontage": [float(lot_frontage)],
-            "Lot Area": [int(lot_area)],
-            "Overall Qual": [int(overall_qual)],
-            "Overall Cond": [int(overall_cond)],
-            "Year Built": [int(year_built)],
-            "Year Remod/Add": [int(year_remod)],
-            "Mas Vnr Area": [float(mas_vnr_area)],
-            "BsmtFin SF 1": [float(bsmtfin_sf_1)],
-            "BsmtFin SF 2": [float(bsmtfin_sf_2)],
-            "Bsmt Unf SF": [float(bsmt_unf_sf)],
-            "Total Bsmt SF": [float(total_bsmt_sf)],
-            "1st Flr SF": [int(first_flr_sf)],
-            "2nd Flr SF": [int(second_flr_sf)],
-            "Low Qual Fin SF": [0],
-            "Gr Liv Area": [float(gr_liv_area)],
-            "Bsmt Full Bath": [0],
-            "Bsmt Half Bath": [0],
-            "Full Bath": [int(full_bath)],
-            "Half Bath": [int(half_bath)],
-            "Bedroom AbvGr": [int(bedrooms)],
-            "Kitchen AbvGr": [1],
-            "TotRms AbvGrd": [int(tot_rms_abv_grd)],
-            "Fireplaces": [int(fireplaces)],
-            "Garage Yr Blt": [int(year_built)],
-            "Garage Cars": [int(garage_cars)],
-            "Garage Area": [float(garage_area)],
-            "Wood Deck SF": [float(wood_deck_sf)],
-            "Open Porch SF": [float(open_porch_sf)],
-            "Enclosed Porch": [0],
-            "3Ssn Porch": [0],
-            "Screen Porch": [0],
-            "Pool Area": [0],
-            "Misc Val": [0],
-            "Mo Sold": [int(mo_sold)],
-            "Yr Sold": [int(yr_sold)],
-        }
-        
-        df = pd.DataFrame(input_data)
-        
-        # Try to load model from MLflow
-        try:
-            # Update this with your actual MLflow run ID
-            # You can find this in mlruns/0/ folder
-            model_uri = "runs:/37fd669970544f8ca4bbc9dc7f821cf6/model"
-            model = mlflow.sklearn.load_model(model_uri)
+        # 1. Gather all numerical/user inputs
+        numerical_inputs = {
+            # Fixed/Default numerical values
+            "Order": 1,
+            "PID": 5286,
+            "MS SubClass": 20,
+            "Low Qual Fin SF": 0,
+            "Bsmt Full Bath": 0,
+            "Bsmt Half Bath": 0,
+            "Kitchen AbvGr": 1,
+            "Enclosed Porch": 0,
+            "3Ssn Porch": 0,
+            "Screen Porch": 0,
+            "Pool Area": 0,
+            "Misc Val": 0,
             
-            # Make prediction
+            # User-defined inputs from Streamlit
+            "Lot Frontage": float(lot_frontage),
+            "Lot Area": int(lot_area),
+            "Overall Qual": int(overall_qual),
+            "Overall Cond": int(overall_cond),
+            "Year Built": int(year_built),
+            "Year Remod/Add": int(year_remod),
+            "Mas Vnr Area": float(mas_vnr_area),
+            "BsmtFin SF 1": float(bsmtfin_sf_1),
+            "BsmtFin SF 2": float(bsmtfin_sf_2),
+            "Bsmt Unf SF": float(bsmt_unf_sf),
+            "Total Bsmt SF": float(total_bsmt_sf),
+            "1st Flr SF": int(first_flr_sf),
+            "2nd Flr SF": int(second_flr_sf),
+            "Gr Liv Area": float(gr_liv_area),
+            "Full Bath": int(full_bath),
+            "Half Bath": int(half_bath),
+            "Bedroom AbvGr": int(bedrooms),
+            "TotRms AbvGrd": int(tot_rms_abv_grd),
+            "Fireplaces": int(fireplaces),
+            "Garage Yr Blt": int(year_built), 
+            "Garage Cars": int(garage_cars),
+            "Garage Area": float(garage_area),
+            "Wood Deck SF": float(wood_deck_sf),
+            "Open Porch SF": float(open_porch_sf),
+            "Mo Sold": int(mo_sold),
+            "Yr Sold": int(yr_sold),
+        }
+
+        # 2. Combine all data
+        final_input_data = {**numerical_inputs, **categorical_defaults}
+
+        # 3. Create DataFrame ensuring correct column order
+        df = pd.DataFrame([final_input_data], columns=expected_columns)
+        
+        # Load model using MLflow
+        model = load_mlflow_model()
+        
+        if model is None:
+            st.error("❌ Model not found. Please ensure MLflow model files are available.")
+            st.info("""
+            **To fix this:**
+            1. Run `python export_model.py` to export the model
+            2. Or ensure `mlruns/` folder is in the repository
+            3. Or upload the model.pkl file to the repository
+            """)
+        else:
+            # Make prediction using MLflow model
             prediction = model.predict(df)
             predicted_price = prediction[0]
             
             # Display result
             st.success(f"## 🎯 Predicted House Price: ${predicted_price:,.2f}")
             
+            # Show MLflow info
             st.info("""
-            **Note:** This is a prediction based on the provided features.
-            - Model accuracy: ~58% (R² Score)
-            - Actual price may vary based on market conditions
-            """)
-            
-        except Exception as e:
-            st.error(f"Model loading error: {str(e)}")
-            st.info("""
-            **To fix this:**
-            1. Ensure MLflow model files are in the repository
-            2. Update model_uri in streamlit_app.py with your run ID
-            3. Or use MLflow model registry
+            **Model Information:**
+            - **Framework:** MLflow + Scikit-learn
+            - **Model Type:** Linear Regression
+            - **Accuracy:** ~58% (R² Score)
+            - **Note:** Actual price may vary based on market conditions
             """)
             
     except Exception as e:
         st.error(f"Error making prediction: {str(e)}")
+        # Optionally, remove the st.exception(e) line if the traceback is too verbose
+        # st.exception(e) 
+
+# --- END OF CORRECTED PREDICTION LOGIC ---
 
 # Footer
 st.markdown("---")
@@ -157,8 +275,7 @@ st.markdown("""
 **Built with:**
 - 🐍 Python
 - 🤖 Scikit-learn
-- 📊 MLflow
+- 📊 **MLflow** (Model Tracking & Serving)
 - 🔄 ZenML
 - 🎨 Streamlit
 """)
-

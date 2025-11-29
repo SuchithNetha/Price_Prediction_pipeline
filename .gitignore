@@ -58,7 +58,7 @@ extracted_data/*.csv
 extracted_data/*.json
 
 # Model artifacts (too large for git)
-*.pkl
+# *.pkl  # Allow model.pkl for deployment
 *.joblib
 *.h5
 *.onnx
