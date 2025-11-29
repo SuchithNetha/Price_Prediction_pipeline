@@ -7,6 +7,7 @@ import numpy as np
 import mlflow
 import mlflow.sklearn
 import os
+import pickle
 
 # Page config
 st.set_page_config(
@@ -31,9 +32,7 @@ with st.sidebar:
     **Model Tracking:** MLflow
     """)
 
-# Initialize MLflow
-# Note: You should be running 'mlflow models serve' in a separate terminal 
-# pointing to the ZenML tracking URI to avoid run location issues.
+# Initialize MLflow (Used primarily for historical context; local model.pkl is prioritized)
 mlflow.set_tracking_uri("./mlruns") 
 
 # Input form
@@ -82,29 +81,25 @@ with col4:
 @st.cache_resource
 def load_mlflow_model():
     """Load MLflow model with multiple fallback options"""
-    # Use the Run ID you found to ensure the correct model is targeted
+    # Using the local model.pkl file is the most robust method for hosted deployment
     run_id = "173084b4925743889a1348fd990f7dc5" 
     
-    # Try different model paths
-    # Note: If you are running the manual model serve, the MLflow runs URI
-    # 'runs:/<run_id>/model' is the correct method, as it communicates with the server.
     model_paths = [
-        f"runs:/{run_id}/model",  # MLflow runs URI (Best for manual serving)
-        f"mlruns/0/{run_id}/artifacts/model",  # Local MLflow path (Fallback)
-        "model.pkl",  # Exported pickle file (Fallback)
+        "model.pkl",                             # 1. LOCAL PICKLE FILE (Prioritized)
+        f"runs:/{run_id}/model",                 # 2. MLflow runs URI (Fallback)
+        f"mlruns/0/{run_id}/artifacts/model",    # 3. Local MLflow path (Fallback)
     ]
     
     for model_path in model_paths:
         try:
             if model_path.endswith('.pkl'):
                 # Load from pickle
-                import pickle
                 with open(model_path, 'rb') as f:
                     model = pickle.load(f)
                 st.sidebar.success("✅ Model loaded from pickle file")
                 return model
             else:
-                # Load from MLflow
+                # Load from MLflow (Only works if the tracking URI is accessible)
                 model = mlflow.sklearn.load_model(model_path)
                 st.sidebar.success(f"✅ Model loaded from MLflow: {model_path}")
                 return model
@@ -113,57 +108,27 @@ def load_mlflow_model():
     
     return None
 
-# --- START OF CORRECTED PREDICTION LOGIC ---
+# --- START OF CORRECTED PREDICTION LOGIC (Ensures all features are present) ---
 
 # Categorical Defaults (to satisfy the ColumnTransformer during inference)
 categorical_defaults = {
-    'MS Zoning': 'RL',
-    'Street': 'Pave',
-    'Alley': 'NA',
-    'Lot Shape': 'Reg',
-    'Land Contour': 'Lvl',
-    'Utilities': 'AllPub',
-    'Lot Config': 'Inside',
-    'Land Slope': 'Gtl',
-    'Neighborhood': 'NAmes',
-    'Condition 1': 'Norm',
-    'Condition 2': 'Norm',
-    'Bldg Type': '1Fam',
-    'House Style': '1Story',
-    'Roof Style': 'Gable',
-    'Roof Matl': 'CompShg',
-    'Exterior 1st': 'VinylSd',
-    'Exterior 2nd': 'VinylSd',
-    'Mas Vnr Type': 'None',
-    'Exter Qual': 'TA',
-    'Exter Cond': 'TA',
-    'Foundation': 'PConc',
-    'Bsmt Qual': 'TA',
-    'Bsmt Cond': 'TA',
-    'Bsmt Exposure': 'No',
-    'BsmtFin Type 1': 'GLQ',
-    'BsmtFin Type 2': 'Unf',
-    'Heating': 'GasA',
-    'Heating QC': 'Ex',
-    'Central Air': 'Y',
-    'Electrical': 'SBrkr',
-    'Kitchen Qual': 'TA',
-    'Functional': 'Typ',
-    'Fireplace Qu': 'NA',
-    'Garage Type': 'Attchd',
-    'Garage Finish': 'Unf',
-    'Garage Qual': 'TA',
-    'Garage Cond': 'TA',
-    'Paved Drive': 'Y',
-    'Pool QC': 'NA',
-    'Fence': 'NA',
-    'Misc Feature': 'NA',
-    'Sale Type': 'WD',
-    'Sale Condition': 'Normal',
+    'MS Zoning': 'RL', 'Street': 'Pave', 'Alley': 'NA', 'Lot Shape': 'Reg', 
+    'Land Contour': 'Lvl', 'Utilities': 'AllPub', 'Lot Config': 'Inside', 
+    'Land Slope': 'Gtl', 'Neighborhood': 'NAmes', 'Condition 1': 'Norm', 
+    'Condition 2': 'Norm', 'Bldg Type': '1Fam', 'House Style': '1Story', 
+    'Roof Style': 'Gable', 'Roof Matl': 'CompShg', 'Exterior 1st': 'VinylSd', 
+    'Exterior 2nd': 'VinylSd', 'Mas Vnr Type': 'None', 'Exter Qual': 'TA', 
+    'Exter Cond': 'TA', 'Foundation': 'PConc', 'Bsmt Qual': 'TA', 
+    'Bsmt Cond': 'TA', 'Bsmt Exposure': 'No', 'BsmtFin Type 1': 'GLQ', 
+    'BsmtFin Type 2': 'Unf', 'Heating': 'GasA', 'Heating QC': 'Ex', 
+    'Central Air': 'Y', 'Electrical': 'SBrkr', 'Kitchen Qual': 'TA', 
+    'Functional': 'Typ', 'Fireplace Qu': 'NA', 'Garage Type': 'Attchd', 
+    'Garage Finish': 'Unf', 'Garage Qual': 'TA', 'Garage Cond': 'TA', 
+    'Paved Drive': 'Y', 'Pool QC': 'NA', 'Fence': 'NA', 'Misc Feature': 'NA', 
+    'Sale Type': 'WD', 'Sale Condition': 'Normal',
 }
 
 # The complete list of columns the model expects, in the correct order.
-# This ensures the DataFrame structure matches the training data exactly.
 expected_columns = [
     'Order', 'PID', 'MS SubClass', 'Lot Frontage', 'Lot Area', 'Overall Qual', 'Overall Cond', 
     'Year Built', 'Year Remod/Add', 'Mas Vnr Area', 'BsmtFin SF 1', 'BsmtFin SF 2', 
@@ -183,75 +148,45 @@ expected_columns = [
 
 if st.button("🔮 Predict Price", type="primary"):
     try:
-        # 1. Gather all numerical/user inputs
+        # 1. Gather all inputs
         numerical_inputs = {
-            # Fixed/Default numerical values
-            "Order": 1,
-            "PID": 5286,
-            "MS SubClass": 20,
-            "Low Qual Fin SF": 0,
-            "Bsmt Full Bath": 0,
-            "Bsmt Half Bath": 0,
-            "Kitchen AbvGr": 1,
-            "Enclosed Porch": 0,
-            "3Ssn Porch": 0,
-            "Screen Porch": 0,
-            "Pool Area": 0,
-            "Misc Val": 0,
-            
-            # User-defined inputs from Streamlit
-            "Lot Frontage": float(lot_frontage),
-            "Lot Area": int(lot_area),
-            "Overall Qual": int(overall_qual),
-            "Overall Cond": int(overall_cond),
-            "Year Built": int(year_built),
-            "Year Remod/Add": int(year_remod),
-            "Mas Vnr Area": float(mas_vnr_area),
-            "BsmtFin SF 1": float(bsmtfin_sf_1),
-            "BsmtFin SF 2": float(bsmtfin_sf_2),
-            "Bsmt Unf SF": float(bsmt_unf_sf),
-            "Total Bsmt SF": float(total_bsmt_sf),
-            "1st Flr SF": int(first_flr_sf),
-            "2nd Flr SF": int(second_flr_sf),
-            "Gr Liv Area": float(gr_liv_area),
-            "Full Bath": int(full_bath),
-            "Half Bath": int(half_bath),
-            "Bedroom AbvGr": int(bedrooms),
-            "TotRms AbvGrd": int(tot_rms_abv_grd),
-            "Fireplaces": int(fireplaces),
-            "Garage Yr Blt": int(year_built), 
-            "Garage Cars": int(garage_cars),
-            "Garage Area": float(garage_area),
-            "Wood Deck SF": float(wood_deck_sf),
-            "Open Porch SF": float(open_porch_sf),
-            "Mo Sold": int(mo_sold),
+            "Order": 1, "PID": 5286, "MS SubClass": 20, "Low Qual Fin SF": 0, 
+            "Bsmt Full Bath": 0, "Bsmt Half Bath": 0, "Kitchen AbvGr": 1, 
+            "Enclosed Porch": 0, "3Ssn Porch": 0, "Screen Porch": 0, 
+            "Pool Area": 0, "Misc Val": 0, "Lot Frontage": float(lot_frontage),
+            "Lot Area": int(lot_area), "Overall Qual": int(overall_qual),
+            "Overall Cond": int(overall_cond), "Year Built": int(year_built),
+            "Year Remod/Add": int(year_remod), "Mas Vnr Area": float(mas_vnr_area),
+            "BsmtFin SF 1": float(bsmtfin_sf_1), "BsmtFin SF 2": float(bsmtfin_sf_2),
+            "Bsmt Unf SF": float(bsmt_unf_sf), "Total Bsmt SF": float(total_bsmt_sf),
+            "1st Flr SF": int(first_flr_sf), "2nd Flr SF": int(second_flr_sf),
+            "Gr Liv Area": float(gr_liv_area), "Full Bath": int(full_bath),
+            "Half Bath": int(half_bath), "Bedroom AbvGr": int(bedrooms),
+            "TotRms AbvGrd": int(tot_rms_abv_grd), "Fireplaces": int(fireplaces),
+            "Garage Yr Blt": int(year_built), "Garage Cars": int(garage_cars),
+            "Garage Area": float(garage_area), "Wood Deck SF": float(wood_deck_sf),
+            "Open Porch SF": float(open_porch_sf), "Mo Sold": int(mo_sold),
             "Yr Sold": int(yr_sold),
         }
 
-        # 2. Combine all data
+        # 2. Combine all data and create DataFrame
         final_input_data = {**numerical_inputs, **categorical_defaults}
-
-        # 3. Create DataFrame ensuring correct column order
         df = pd.DataFrame([final_input_data], columns=expected_columns)
         
-        # Load model using MLflow
+        # Load model
         model = load_mlflow_model()
         
         if model is None:
-            st.error("❌ Model not found. Please ensure MLflow model files are available.")
-            st.info("""
-            **To fix this:**
-            1. Run `python export_model.py` to export the model
-            2. Or ensure `mlruns/` folder is in the repository
-            3. Or upload the model.pkl file to the repository
-            """)
+            st.error("❌ Model not found. Deployment artifact 'model.pkl' is missing.")
         else:
-            # Make prediction using MLflow model
-            prediction = model.predict(df)
-            predicted_price = prediction[0]
+            # 3. Make prediction (Output is a log-transformed value)
+            prediction_log = model.predict(df)
+            
+            # 4. Apply Inverse Transformation (np.expm1 is the inverse of np.log1p)
+            predicted_price_actual = np.expm1(prediction_log[0])
             
             # Display result
-            st.success(f"## 🎯 Predicted House Price: ${predicted_price:,.2f}")
+            st.success(f"## 🎯 Predicted House Price: ${predicted_price_actual:,.2f}")
             
             # Show MLflow info
             st.info("""
@@ -264,8 +199,6 @@ if st.button("🔮 Predict Price", type="primary"):
             
     except Exception as e:
         st.error(f"Error making prediction: {str(e)}")
-        # Optionally, remove the st.exception(e) line if the traceback is too verbose
-        # st.exception(e) 
 
 # --- END OF CORRECTED PREDICTION LOGIC ---
 
